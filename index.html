@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chug song lyrics</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Frank+Ruhl+Libre:wght@400;700&family=Heebo:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eef1f6;--panel:#fff;--ink:#1b2340;--muted:#5b6482;--line:#d5dae6;--accent:#2f5d62;--sel:#e1ecec}
+@media (prefers-color-scheme:dark){:root{--bg:#10141f;--panel:#171c2b;--ink:#e8ebf5;--muted:#9aa3bf;--line:#2a3148;--accent:#7fc1c7;--sel:#1f2d33}}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:16px/1.5 Heebo,system-ui,sans-serif;min-height:100vh}
+header{padding:24px 20px 8px;max-width:1000px;margin:0 auto}
+h1{margin:0;font:700 28px/1.2 "Frank Ruhl Libre",Georgia,serif}
+header p{margin:4px 0 0;color:var(--muted)}
+main{max-width:1000px;margin:0 auto;padding:16px 20px 40px;display:grid;grid-template-columns:320px 1fr;gap:16px}
+@media(max-width:760px){main{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px}
+#list{padding:8px;max-height:70vh;overflow:auto}
+#list button{display:block;width:100%;text-align:start;background:none;border:0;border-radius:6px;padding:10px 12px;color:inherit;font:inherit;cursor:pointer}
+#list button:hover{background:var(--sel)}
+#list button[aria-current="true"]{background:var(--sel);box-shadow:inset 3px 0 0 var(--accent)}
+#list button:focus-visible,#refresh:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.t{font-weight:600}.a{color:var(--muted);font-size:14px}
+#view{padding:24px;min-height:300px}
+#view h2{margin:0;font:700 26px/1.25 "Frank Ruhl Libre",Georgia,serif}
+.meta{color:var(--muted);margin:4px 0 16px}
+.meta a{color:var(--accent)}
+#lyrics{white-space:pre-wrap;font:400 22px/1.7 "Frank Ruhl Libre",Georgia,serif;max-width:60ch}
+.empty{color:var(--muted)}
+.srch{margin-top:24px;border-top:1px solid var(--line);padding-top:12px}
+.srch summary{cursor:pointer;color:var(--accent)}
+.row{display:flex;gap:8px;margin:10px 0}
+.row input{flex:1;min-width:0;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+.row button,.cand{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:8px 12px;font:inherit;cursor:pointer}
+.cand{display:block;width:100%;text-align:start;margin-top:6px}
+.cand:hover,.row button:hover{background:var(--sel)}
+.srch :focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+#bar{display:flex;gap:8px;align-items:center;padding:0 20px;max-width:1000px;margin:8px auto 0}
+#refresh{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:6px 12px;font:inherit;cursor:pointer}
+#status{color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Chug song lyrics</h1>
+  <p>Pick a requested song to see its lyrics.</p>
+</header>
+<div id="bar"><button id="refresh" type="button">Refresh requests</button><span id="status" role="status"></span></div>
+<main>
+  <nav class="panel" id="list" aria-label="Requested songs"></nav>
+  <section class="panel" id="view" aria-live="polite"><p class="empty">Select a song from the list.</p></section>
+</main>
+<script>
+// lyrics.json is filled automatically by the GitHub Action; entries you add by hand are never overwritten.
+const LYRICS_URL = "lyrics.json";
+
+
+const $ = id => document.getElementById(id);
+const key = s => (s||"").toLowerCase().replace(/[^\p{L}\p{N}]+/gu,"");
+let songs = [], lyricsDb = {};
+
+function parseCSV(text){
+  const rows=[]; let row=[], cell="", q=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(q){ if(c=='"'){ if(text[i+1]=='"'){cell+='"';i++} else q=false } else cell+=c }
+    else if(c=='"') q=true;
+    else if(c==","){row.push(cell);cell=""}
+    else if(c=="\n"){row.push(cell);rows.push(row);row=[];cell=""}
+    else if(c!="\r") cell+=c;
+  }
+  if(cell||row.length){row.push(cell);rows.push(row)}
+  return rows;
+}
+
+function buildSongs(rows){
+  const map = new Map();
+  for(const r of rows){
+    const [ts,who,title,artist] = [r[0],r[1],(r[2]||"").trim(),(r[3]||"").trim()];
+    if(!title || !/\d/.test(ts||"")) continue;          // skips header / blank rows
+    const k = key(title);
+    if(!map.has(k)) map.set(k,{k,title,artist,who:new Set()});
+    const s = map.get(k);
+    if(who) s.who.add(who.trim());
+    if(!s.artist && artist) s.artist = artist;
+  }
+  return [...map.values()];
+}
+
+let showToken=0;
+const clean = t => t.replace(/\([^)]*\)|\[[^\]]*\]/g," ").replace(/\s[-–—]\s.*$/," ").replace(/\s+/g," ").trim();
+const firstArtist = a => (a||"").split(/,|&|\bfeat\.?|\bwith\b|\band\b/i)[0].trim();
+
+async function lrcList(params){
+  const r = await fetch("https://lrclib.net/api/search?"+new URLSearchParams(params));
+  if(!r.ok) return [];
+  return (await r.json()).filter(x=>x.plainLyrics && x.plainLyrics.trim());
+}
+async function ovh(artist,title){
+  if(!artist||!title) return null;
+  const r = await fetch("https://api.lyrics.ovh/v1/"+encodeURIComponent(artist)+"/"+encodeURIComponent(title));
+  if(!r.ok) return null;
+  const j = await r.json(); return j.lyrics && j.lyrics.trim() ? j.lyrics.trim() : null;
+}
+const words = (t,n) => t.split(/\s+/).slice(0,n).join(" ");
+
+async function getLyrics(s){
+  const man=lyricsDb[s.k];
+  if(man){
+    if(typeof man==="object") return man.text ? {text:man.text, source:man.source||"lyrics.json", url:man.url} : null;
+    return /^https?:\/\//.test(man.trim()) ? {link:man.trim()} : {text:man, source:"lyrics.json"};
+  }
+  const ck="lyr:"+s.k;
+  try{ const c=JSON.parse(localStorage.getItem(ck)||"null"); if(c) return c }catch(e){}
+  const title=clean(s.title), artist=firstArtist(s.artist);
+  const tries=[
+    {track_name:title, artist_name:artist},
+    {q:(title+" "+artist).trim()},
+    {track_name:title},
+    {q:title},
+    {q:words(title,3)}                       // long or chatty titles: first few words only
+  ];
+  for(const p of tries){
+    try{
+      const l = await lrcList(p);
+      if(l.length) return save(ck,{text:l[0].plainLyrics.trim(), source:"LRCLIB"});
+    }catch(e){}
+  }
+  try{ const t=await ovh(artist,title); if(t) return save(ck,{text:t, source:"lyrics.ovh"}) }catch(e){}
+  return null;
+}
+function save(ck,r){ try{localStorage.setItem(ck,JSON.stringify(r))}catch(e){}; return r }
+
+// Manual search: type any words, pick the right match from the results.
+function searchBox(s, onPick){
+  const w=document.createElement("details"); w.className="srch";
+  const sm=document.createElement("summary"); sm.textContent="Search for different lyrics"; w.appendChild(sm);
+  const f=document.createElement("div"); f.className="row";
+  const i=document.createElement("input"); i.type="search"; i.value=(clean(s.title)+" "+firstArtist(s.artist)).trim(); i.setAttribute("aria-label","Lyrics search");
+  const go=document.createElement("button"); go.type="button"; go.textContent="Search";
+  f.append(i,go); w.appendChild(f);
+  const out=document.createElement("div"); w.appendChild(out);
+  const run=async()=>{
+    out.textContent="Searching…";
+    try{
+      const q=i.value.trim(); const seen=new Set(); const c=[];
+      for(const p of [{q}, {track_name:q}]){ for(const x of await lrcList(p)){ if(!seen.has(x.id)){seen.add(x.id); c.push({label:x.trackName+" — "+x.artistName, get:async()=>({text:x.plainLyrics.trim(), source:"LRCLIB"})})} } }
+      out.textContent="";
+      if(!c.length){ out.textContent="No matches. Try fewer words or another spelling."; return }
+      for(const x of c.slice(0,16)){
+        const b=document.createElement("button"); b.type="button"; b.className="cand"; b.dir="auto";
+        b.textContent=x.label; b.onclick=async()=>{ b.textContent="Loading…"; const r=await x.get().catch(()=>null); if(r) onPick(r); else b.textContent="Couldn't load that one" };
+        out.appendChild(b);
+      }
+    }catch(e){ out.textContent="Search failed. Check your connection and try again." }
+  };
+  go.onclick=run; i.onkeydown=e=>{ if(e.key==="Enter") run() };
+  return w;
+}
+
+function renderList(){
+  const list=$("list"); list.textContent="";
+  if(!songs.length){ list.innerHTML='<p class="empty" style="padding:12px">No requests found.</p>'; return }
+  for(const s of songs){
+    const b=document.createElement("button"); b.type="button"; b.dataset.k=s.k;
+    b.innerHTML='<div class="t" dir="auto"></div><div class="a" dir="auto"></div>';
+    b.children[0].textContent=s.title; b.children[1].textContent=s.artist;
+    b.onclick=()=>show(s.k);
+    list.appendChild(b);
+  }
+}
+
+function show(k){
+  const s=songs.find(x=>x.k===k); if(!s) return;
+  for(const b of $("list").children) b.setAttribute("aria-current", b.dataset.k===k);
+  const v=$("view"); v.textContent="";
+  const h=document.createElement("h2"); h.dir="auto"; h.textContent=s.title; v.appendChild(h);
+  const m=document.createElement("p"); m.className="meta";
+  const q=encodeURIComponent(s.title+" "+s.artist);
+  m.append((s.artist?s.artist+" · ":"")+"Requested by "+[...s.who].join(", ")+" · ");
+  const a=document.createElement("a"); a.href="https://open.spotify.com/search/"+q; a.target="_blank"; a.rel="noopener"; a.textContent="Find on Spotify";
+  m.appendChild(a);
+  const jq=encodeURIComponent("site:jyrics.com "+clean(s.title)+" "+firstArtist(s.artist));
+  const j=document.createElement("a"); j.href="https://www.google.com/search?q="+jq; j.target="_blank"; j.rel="noopener"; j.textContent="Find on Jyrics";
+  m.append(" · "); m.appendChild(j); v.appendChild(m);
+  const d0=document.createElement("div"); d0.className="empty"; d0.textContent="Searching for lyrics…"; v.appendChild(d0);
+  const token=++showToken;
+  const draw=r=>{
+    if(token!==showToken) return;
+    v.textContent=""; v.append(h,m);
+    const d=document.createElement("div");
+    if(r && r.link){ const l=document.createElement("a"); l.href=r.link; l.target="_blank"; l.rel="noopener"; l.textContent="Open the lyrics page"; d.appendChild(l); v.appendChild(d) }
+    else if(r){ d.id="lyrics"; d.dir="auto"; d.textContent=r.text; v.appendChild(d);
+      const c=document.createElement("p"); c.className="meta"; c.textContent="Lyrics from "; if(r.url){ const u=document.createElement("a"); u.href=r.url; u.target="_blank"; u.rel="noopener"; u.textContent=r.source; c.appendChild(u) } else c.append(r.source); v.appendChild(c) }
+    else { d.className="empty"; d.textContent="No lyrics found automatically. Use the search below, or "; 
+      const g=document.createElement("a"); g.href="https://www.google.com/search?q="+encodeURIComponent(s.title+" "+s.artist+" lyrics"); g.target="_blank"; g.rel="noopener"; g.textContent="search the web";
+      d.appendChild(g); d.append("."); v.appendChild(d) }
+    const sb=searchBox(s, pick=>{ save("lyr:"+s.k,pick); draw(pick) });
+    if(!r) sb.open=true;
+    v.appendChild(sb);
+  };
+  getLyrics(s).then(draw);
+  history.replaceState(null,"","#"+encodeURIComponent(s.k));
+}
+
+async function load(){
+  $("status").textContent="Loading…";
+  try{
+    const cfg = await fetch("config.json?t="+Date.now()).then(r=>r.json());
+    const SHEET_CSV_URL = cfg.sheet_csv_url;
+    if(!SHEET_CSV_URL || SHEET_CSV_URL.startsWith("PASTE")) throw new Error("Set sheet_csv_url in config.json");
+    const [csv, lj] = await Promise.all([
+      fetch(SHEET_CSV_URL+(SHEET_CSV_URL.includes("?")?"&":"?")+"t="+Date.now()).then(r=>{if(!r.ok)throw new Error("Sheet "+r.status);return r.text()}),
+      fetch(LYRICS_URL+"?t="+Date.now()).then(r=>r.ok?r.json():{}).catch(()=>({}))
+    ]);
+    lyricsDb={}; for(const t in lj) lyricsDb[key(t)]=lj[t];   // match titles loosely
+    songs=buildSongs(parseCSV(csv)); renderList();
+    const k=decodeURIComponent(location.hash.slice(1)); if(k) show(k);
+    $("status").textContent=songs.length+" songs";
+  }catch(e){
+    console.error(e);
+    $("status").textContent = location.protocol==="file:"
+      ? "Open this page from GitHub Pages or a local server, not by double-clicking the file (browsers block the sheet request)."
+      : "Couldn't load the sheet: "+(e.message||e);
+  }
+}
+$("refresh").onclick=load; load();
+</script>
+</body>
+</html>
